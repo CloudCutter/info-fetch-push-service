@@ -1,0 +1,9 @@
+{
+  "service_enabled": true,
+  "x_usernames": ["OpenAI", "xai"],
+  "x_poll_interval_seconds": 600,
+  "x_fetch_limit": 5,
+  "deepseek_model": "deepseek-v4-flash",
+  "summary_style_prompt": "Write the summary in Chinese for a notification reader. Return one short title and 2 to 4 high-signal sentences. If the post is opinionated, extract the core viewpoint. If the post is news-like, emphasize the event and impact.",
+  "feishu_mention_all": false
+}
