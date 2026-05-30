@@ -25,6 +25,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("init-runtime-config", help="Create a runtime config file if it does not exist.")
     subparsers.add_parser("show-config", help="Print the currently loaded runtime config.")
     subparsers.add_parser("login", help="Open a browser and save X login state locally.")
+    subparsers.add_parser(
+        "import-edge-session",
+        help="Import X login cookies from the local Microsoft Edge profile into the Playwright session file.",
+    )
     subparsers.add_parser("run-once", help="Run one fetch/summarize/push cycle.")
     subparsers.add_parser("serve", help="Run the service in a loop.")
 
@@ -59,15 +63,22 @@ def main() -> int:
             print(str(exc), file=sys.stderr)
             return 1
 
-    if args.command == "login":
+    if args.command in {"login", "import-edge-session"}:
         from .fetchers.x_scraper import XTimelineScraper
 
         scraper = XTimelineScraper(
             storage_state_path=settings.x_login_state_path,
             headless=False,
+            browser_channel=settings.x_browser_channel,
         )
-        scraper.login()
-        print(f"Saved X login state to {settings.x_login_state_path}")
+
+        if args.command == "login":
+            scraper.login()
+            print(f"Saved X login state to {settings.x_login_state_path}")
+            return 0
+
+        count = scraper.import_edge_login_state()
+        print(f"Imported {count} X-related cookies into {settings.x_login_state_path}")
         return 0
 
     try:

@@ -32,7 +32,9 @@ class DeepSeekSummarizer:
                             "You summarize X posts for a Chinese-speaking reader. "
                             "Return compact JSON with keys: title, body, tags. "
                             "title should be at most 24 Chinese characters. "
-                            "body should be 2 to 4 concise bullet-style sentences merged into one paragraph. "
+                            "body should be 2 to 4 concise sentences merged into one paragraph. "
+                            "Prioritize extracting stock ideas, sector ideas, recommendation logic, and the author's likely motivation for mentioning it now. "
+                            "If no stock idea is present, summarize the market view and potential implication instead. "
                             "tags should contain 1 to 3 short tags. "
                             f"Additional style requirement: {self.style_prompt}"
                         ),

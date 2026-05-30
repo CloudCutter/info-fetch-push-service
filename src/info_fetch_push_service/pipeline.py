@@ -31,6 +31,7 @@ class Pipeline:
         scraper = XTimelineScraper(
             storage_state_path=self.static_settings.x_login_state_path,
             headless=self.static_settings.x_headless,
+            browser_channel=self.static_settings.x_browser_channel,
         )
         summarizer = DeepSeekSummarizer(
             api_key=self.static_settings.deepseek_api_key,

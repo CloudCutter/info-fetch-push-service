@@ -14,10 +14,11 @@ except ImportError:  # pragma: no cover - fallback for pre-install bootstrap flo
 
 
 DEFAULT_SUMMARY_STYLE_PROMPT = (
-    "Write the summary in Chinese for a notification reader. "
-    "Return one short title and 2 to 4 high-signal sentences. "
-    "If the post is opinionated, extract the core viewpoint. "
-    "If the post is news-like, emphasize the event and impact."
+    "Write the summary in Chinese for an investment-focused reader. "
+    "First determine whether the post explicitly or implicitly recommends a stock, ETF, sector, or investment theme. "
+    "If yes, identify the target, summarize the recommendation reason, and infer why the author is recommending it now. "
+    "If no direct stock is mentioned, summarize the market view, sector implication, and possible watchlist direction. "
+    "Return one short title and 2 to 4 high-signal sentences."
 )
 
 
@@ -41,6 +42,7 @@ def _parse_list(value: Any) -> list[str]:
 
 @dataclass(slots=True)
 class StaticSettings:
+    x_browser_channel: str | None
     x_headless: bool
     x_login_state_path: Path
     database_path: Path
@@ -53,9 +55,10 @@ class StaticSettings:
 
     @classmethod
     def load(cls) -> "StaticSettings":
-        load_dotenv()
+        load_dotenv(override=True)
 
         return cls(
+            x_browser_channel=os.getenv("X_BROWSER_CHANNEL", "msedge").strip() or None,
             x_headless=_parse_bool(os.getenv("X_HEADLESS"), True),
             x_login_state_path=Path(os.getenv("X_LOGIN_STATE_PATH", "data/x-login-state.json")),
             database_path=Path(os.getenv("DATABASE_PATH", "data/service.db")),
@@ -158,7 +161,7 @@ class RuntimeConfigProvider:
                 "Run `info-fetch-push init-runtime-config` first."
             )
 
-        raw = self.config_path.read_text(encoding="utf-8")
+        raw = self.config_path.read_text(encoding="utf-8-sig")
         data = json.loads(raw)
         if not isinstance(data, dict):
             raise ValueError("Runtime config must be a JSON object.")

@@ -1,86 +1,72 @@
 # X Info Fetch Push Service
 
-本项目会在本地抓取指定 X 账号的新推文，调用 DeepSeek API 生成中文摘要，并推送到飞书群机器人。
+## Product Overview
 
-## 特点
+This project runs locally, monitors selected X accounts, detects newly published posts, summarizes only the new items with DeepSeek, and pushes the results to a Feishu bot webhook.
 
-- 不使用 X 官方 API
-- 本地保存 X 登录态和已处理推文
-- 运行时配置支持动态生效
-- 通过 DeepSeek API 做摘要
-- 通过飞书群机器人推送消息
+The product goal is:
 
-## 架构
+- avoid the paid X official API
+- avoid repeated summaries for old posts
+- keep deployment simple enough for a personal machine
+- allow runtime config changes without restarting the whole service
+
+## How It Works
 
 ```text
-Scheduler -> X Scraper -> Normalizer -> Deduper -> DeepSeek Summarizer -> Feishu Notifier
-                                 |                                          |
-                                 +---------------- SQLite ------------------+
+Scheduler
+  -> X Scraper
+  -> Compare latest posts with locally stored processed tweet ids
+  -> If no new posts: stop here and do not call DeepSeek
+  -> If new posts exist: call DeepSeek for summary
+  -> Push result to Feishu
+  -> Save processed tweet ids and summaries into SQLite
 ```
 
-## 目录结构
+## Current Architecture
 
 ```text
 src/info_fetch_push_service/
-  ai/deepseek.py
-  fetchers/x_scraper.py
-  notifiers/feishu.py
-  config.py
-  storage.py
-  pipeline.py
-  main.py
-config/runtime.example.json
+  ai/deepseek.py              DeepSeek summary client
+  fetchers/x_scraper.py       X page scraper based on Playwright
+  notifiers/feishu.py         Feishu webhook sender
+  config.py                   Static config and runtime config loader
+  storage.py                  SQLite persistence
+  pipeline.py                 Main fetch/summarize/push workflow
+  main.py                     CLI entrypoint
+
+config/runtime.example.json   Runtime config template
+config/runtime.json           Local runtime config, loaded every cycle
+data/service.db               Local SQLite database
+data/x-login-state.json       Saved X login session
 ```
 
-## 安装
+## Config Design
 
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -e .
-python -m playwright install chromium
-Copy-Item .env.example .env
-```
+The project uses two layers of config.
 
-## 静态配置
+### 1. Static Config
 
-静态配置放在 `.env`，主要是密钥、路径、Webhook 这类通常需要重启才生效的内容。
+Static config is read from `.env`. These values are environment-level settings and normally require restart after modification.
 
-关键字段：
+Fields:
 
 - `DEEPSEEK_API_KEY`
+- `DEEPSEEK_BASE_URL`
+- `DEEPSEEK_MODEL`
 - `FEISHU_WEBHOOK_URL`
 - `FEISHU_BOT_SECRET`
+- `X_BROWSER_CHANNEL`
+- `X_HEADLESS`
 - `X_LOGIN_STATE_PATH`
 - `DATABASE_PATH`
 - `RUNTIME_CONFIG_PATH`
-- `X_HEADLESS`
 
-## 运行时配置
+### 2. Runtime Config
 
-运行时配置放在 `config/runtime.json`，每轮执行前都会重新读取一次，因此修改后下一轮即可生效。
+Runtime config is stored in `config/runtime.json`. It is reloaded before every cycle, so changes take effect in the next polling round.
 
-先初始化模板：
-
-```powershell
-info-fetch-push init-runtime-config
-```
-
-默认运行时配置文件内容如下：
-
-```json
-{
-  "service_enabled": true,
-  "x_usernames": ["OpenAI", "xai"],
-  "x_poll_interval_seconds": 600,
-  "x_fetch_limit": 5,
-  "deepseek_model": "deepseek-v4-flash",
-  "summary_style_prompt": "请输出适合通知消息阅读的中文摘要。先给出一句简短标题，再给出 2 到 4 句高信息密度摘要。如果内容偏观点表达，请提炼核心判断；如果内容偏新闻，请强调事件和影响。",
-  "feishu_mention_all": false
-}
-```
-
-动态生效的字段：
+Fields:
 
 - `service_enabled`
 - `x_usernames`
@@ -90,43 +76,192 @@ info-fetch-push init-runtime-config
 - `summary_style_prompt`
 - `feishu_mention_all`
 
-## 首次登录 X
+## Current Runtime Config For This Project
 
-```powershell
-info-fetch-push login
+```json
+{
+  "service_enabled": true,
+  "x_usernames": ["NullOreo_"],
+  "x_poll_interval_seconds": 300,
+  "x_fetch_limit": 5,
+  "deepseek_model": "deepseek-v4-flash",
+  "summary_style_prompt": "Write the summary in Chinese for an investment-focused reader. First determine whether the post explicitly or implicitly recommends a stock, ETF, sector, or investment theme. If yes, identify the target, summarize the recommendation reason, and infer why the author is recommending it now. If no direct stock is mentioned, summarize the market view, sector implication, and possible watchlist direction. Return one short title and 2 to 4 high-signal sentences.",
+  "feishu_mention_all": false
+}
 ```
 
-程序会打开浏览器。完成登录后，回终端按回车保存登录态。
+## Product Behavior Rules
 
-## 查看当前运行时配置
+- If the latest fetched posts are already present in local storage, DeepSeek must not be called.
+- Only newly discovered tweet ids should enter the summary stage.
+- Processed tweet ids and summaries are stored in SQLite to prevent repeat pushes.
+- If X login expires, the operator must refresh login manually.
+- Runtime config changes should take effect in the next polling cycle.
 
-```powershell
-info-fetch-push show-config
-```
+## Local Setup
 
-## 运行
-
-先执行一次：
-
-```powershell
-info-fetch-push run-once
-```
-
-常驻运行：
+### 1. Create the virtual environment
 
 ```powershell
-info-fetch-push serve
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 ```
 
-## 注意事项
+### 2. Install dependencies
 
-- X 页面结构可能变化，必要时需要调整抓取选择器
-- 如果 X 登录失效，重新执行 `info-fetch-push login`
-- 飞书自定义机器人用于群通知，最适合做消息推送
-- DeepSeek 模型名和价格可能变动，建议优先参考官方文档
+```powershell
+pip install -e .
+python -m playwright install chromium
+```
 
-## 参考文档
+### 3. Create `.env`
+
+Use `.env.example` as the base:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Then fill at least:
+
+- `DEEPSEEK_API_KEY`
+- `FEISHU_WEBHOOK_URL`
+- `FEISHU_BOT_SECRET` if your Feishu bot requires signing
+
+### 4. Initialize runtime config
+
+```powershell
+.venv\Scripts\python -m info_fetch_push_service.main init-runtime-config
+```
+
+### 5. Login to X
+
+```powershell
+.venv\Scripts\python -m info_fetch_push_service.main login
+```
+
+This opens a browser window. Complete X login manually. After X redirects to the home timeline, the session will be saved to `data/x-login-state.json` automatically.
+
+`X_BROWSER_CHANNEL` defaults to `msedge`, so both login and scraping use your local Microsoft Edge installation.
+
+### Alternative: import the existing Edge session
+
+If X blocks the automation login flow because it treats it as a new device, close all Microsoft Edge windows first and then run:
+
+```powershell
+.venv\Scripts\python -m info_fetch_push_service.main import-edge-session
+```
+
+This imports X-related cookies from your existing Edge profile into `data/x-login-state.json`.
+
+### 6. Run one test cycle
+
+```powershell
+.venv\Scripts\python -m info_fetch_push_service.main run-once
+```
+
+### 7. Run as a local service
+
+```powershell
+.venv\Scripts\python -m info_fetch_push_service.main serve
+```
+
+## Daily Usage
+
+### Change the monitored X account
+
+Edit `config/runtime.json`:
+
+```json
+"x_usernames": ["NullOreo_"]
+```
+
+The next cycle will use the new list automatically.
+
+### Change the polling frequency
+
+Edit:
+
+```json
+"x_poll_interval_seconds": 300
+```
+
+`300` means 5 minutes.
+
+### Change the summary style
+
+Edit:
+
+```json
+"summary_style_prompt": "Write the summary in Chinese for an investment-focused reader. First determine whether the post explicitly or implicitly recommends a stock, ETF, sector, or investment theme. If yes, identify the target, summarize the recommendation reason, and infer why the author is recommending it now. If no direct stock is mentioned, summarize the market view, sector implication, and possible watchlist direction. Return one short title and 2 to 4 high-signal sentences."
+```
+
+### Temporarily pause the service
+
+Edit:
+
+```json
+"service_enabled": false
+```
+
+The next cycle will skip all work.
+
+## Storage Logic
+
+SQLite stores processed tweet records. The current logic prevents repeated API calls like this:
+
+1. Fetch latest posts from X
+2. Check each fetched `tweet_id` against SQLite
+3. Keep only unseen posts
+4. If unseen post count is `0`, skip DeepSeek completely
+5. If unseen post count is greater than `0`, summarize and push them
+
+This satisfies the rule that no DeepSeek request should be made when there are no new posts.
+
+## Known Limitations
+
+- X page structure may change and require scraper adjustment
+- X login must be refreshed manually when expired
+- The current push target is Feishu only
+- The current persistence logic stores processed posts after successful summary and push
+
+## Troubleshooting
+
+### 1. DeepSeek works but Feishu push fails
+
+Check:
+
+- `FEISHU_WEBHOOK_URL`
+- `FEISHU_BOT_SECRET`
+- whether the Feishu bot has IP or keyword restrictions enabled
+
+### 2. X page opens but no tweets are found
+
+Possible reasons:
+
+- login expired
+- X showed a challenge page
+- the page structure changed
+- automation login was treated as a new device
+
+Retry:
+
+```powershell
+.venv\Scripts\python -m info_fetch_push_service.main login
+```
+
+Or, if you are already logged into X in Edge:
+
+```powershell
+.venv\Scripts\python -m info_fetch_push_service.main import-edge-session
+```
+
+### 3. Runtime config changes do not seem applied
+
+Confirm that you edited `config/runtime.json`, not `config/runtime.example.json`.
+
+## References
 
 - [DeepSeek API Docs](https://api-docs.deepseek.com/)
-- [DeepSeek Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/)
+- [DeepSeek Pricing](https://api-docs.deepseek.com/quick_start/pricing/)
 - [Feishu Custom Bot](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot?lang=zh-CN)
