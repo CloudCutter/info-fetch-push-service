@@ -44,6 +44,8 @@ class Pipeline:
             storage_state_path=self.static_settings.x_login_state_path,
             headless=self.static_settings.x_headless,
             browser_channel=self.static_settings.x_browser_channel,
+            system_user_data_path=self.static_settings.x_system_user_data_path,
+            imported_profile_path=self.static_settings.x_imported_profile_path,
         )
         summarizer = DeepSeekSummarizer(
             api_key=self.static_settings.deepseek_api_key,
@@ -79,6 +81,16 @@ class Pipeline:
                     now_local=now_local,
                     runtime=runtime,
                 )
+
+            # We fetch more posts than the regular push limit so morning digests can
+            # sweep the full quiet-hours window. Outside that digest path, only the
+            # newest x_fetch_limit posts should be sent individually to avoid a large
+            # historical backfill flood on a fresh run.
+            regular_tweets = sorted(
+                regular_tweets,
+                key=lambda item: self._parse_published_at(item.published_at),
+                reverse=True,
+            )[: runtime.x_fetch_limit]
 
             for tweet in regular_tweets:
                 logger.info("Summarizing tweet %s", tweet.tweet_id)

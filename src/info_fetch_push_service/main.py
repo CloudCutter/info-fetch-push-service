@@ -93,6 +93,8 @@ def main() -> int:
             storage_state_path=settings.x_login_state_path,
             headless=False,
             browser_channel=settings.x_browser_channel,
+            system_user_data_path=settings.x_system_user_data_path,
+            imported_profile_path=settings.x_imported_profile_path,
         )
 
         if args.command == "login":

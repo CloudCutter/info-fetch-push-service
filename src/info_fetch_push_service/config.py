@@ -48,6 +48,8 @@ class StaticSettings:
     x_headless: bool
     local_timezone_name: str
     x_login_state_path: Path
+    x_system_user_data_path: Path
+    x_imported_profile_path: Path
     database_path: Path
     runtime_config_path: Path
     deepseek_api_key: str
@@ -65,6 +67,13 @@ class StaticSettings:
             x_headless=_parse_bool(os.getenv("X_HEADLESS"), True),
             local_timezone_name=os.getenv("LOCAL_TIMEZONE", "Asia/Shanghai").strip() or "Asia/Shanghai",
             x_login_state_path=Path(os.getenv("X_LOGIN_STATE_PATH", "data/x-login-state.json")),
+            x_system_user_data_path=Path(
+                os.getenv(
+                    "X_SYSTEM_USER_DATA_PATH",
+                    str(Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Edge" / "User Data"),
+                )
+            ),
+            x_imported_profile_path=Path(os.getenv("X_IMPORTED_PROFILE_PATH", "data/edge-profile-import")),
             database_path=Path(os.getenv("DATABASE_PATH", "data/service.db")),
             runtime_config_path=Path(os.getenv("RUNTIME_CONFIG_PATH", "config/runtime.json")),
             deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", "").strip(),
@@ -76,6 +85,7 @@ class StaticSettings:
 
     def ensure_directories(self) -> None:
         self.x_login_state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.x_imported_profile_path.parent.mkdir(parents=True, exist_ok=True)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.runtime_config_path.parent.mkdir(parents=True, exist_ok=True)
 
