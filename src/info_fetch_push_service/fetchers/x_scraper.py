@@ -148,7 +148,14 @@ class XTimelineScraper:
                 scroll_attempts += 1
 
             browser.close()
-            ordered = sorted(tweets.values(), key=lambda item: (item.published_at, item.tweet_id))
+            # Return newest posts first. X renders newest-first on the page,
+            # but we sort explicitly so mixed DOM order or extra scrolling
+            # cannot accidentally surface older items as the "latest" ones.
+            ordered = sorted(
+                tweets.values(),
+                key=lambda item: (item.published_at, item.tweet_id),
+                reverse=True,
+            )
             return ordered[:limit]
 
     def _is_supported_domain(self, domain: str) -> bool:

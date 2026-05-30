@@ -3,16 +3,38 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+import subprocess
 import sys
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from .config import RuntimeConfigProvider, StaticSettings
 
 
 def configure_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    root = Path.cwd()
+    log_dir = root / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "service.log"
+
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s")
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+
+    file_handler = RotatingFileHandler(
+        log_path,
+        maxBytes=2 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
     )
+    file_handler.setFormatter(formatter)
+
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(stream_handler)
+    root_logger.addHandler(file_handler)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
         "import-edge-session",
         help="Import X login cookies from the local Microsoft Edge profile into the Playwright session file.",
     )
+    subparsers.add_parser("stop", help="Stop all background serve processes for this project.")
     subparsers.add_parser("run-once", help="Run one fetch/summarize/push cycle.")
     subparsers.add_parser("serve", help="Run the service in a loop.")
 
@@ -81,6 +104,11 @@ def main() -> int:
         print(f"Imported {count} X-related cookies into {settings.x_login_state_path}")
         return 0
 
+    if args.command == "stop":
+        stopped = stop_background_service()
+        print(f"Stopped {stopped} serve process(es)")
+        return 0
+
     try:
         settings.validate_runtime_dependencies()
     except ValueError as exc:
@@ -102,6 +130,25 @@ def main() -> int:
 
     parser.print_help()
     return 1
+
+
+def stop_background_service() -> int:
+    script = (
+        "$procs = Get-CimInstance Win32_Process | "
+        "Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*info_fetch_push_service.main*serve*' }; "
+        "$count = @($procs).Count; "
+        "foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force }; "
+        "Write-Output $count"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=os.environ.copy(),
+    )
+    output = result.stdout.strip()
+    return int(output) if output else 0
 
 
 if __name__ == "__main__":

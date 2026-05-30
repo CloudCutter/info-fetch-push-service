@@ -190,6 +190,12 @@ This imports X-related cookies from your existing Edge profile into `data/x-logi
 .venv\Scripts\python -m info_fetch_push_service.main serve
 ```
 
+### 8. Stop the background service
+
+```powershell
+.venv\Scripts\python -m info_fetch_push_service.main stop
+```
+
 ## Daily Usage
 
 ### Change the monitored X accounts
@@ -249,6 +255,23 @@ Edit:
 ```
 
 The next cycle will skip all work.
+
+## Logging
+
+The service writes application logs to:
+
+- `logs/service.log`
+
+Log rotation is enabled:
+
+- current file: `logs/service.log`
+- max file size: about `2 MB`
+- backup count: `5`
+
+If you start the service from PowerShell with additional output redirection, you may also see:
+
+- `logs/service.out.log`
+- `logs/service.err.log`
 
 ## Storage Logic
 
