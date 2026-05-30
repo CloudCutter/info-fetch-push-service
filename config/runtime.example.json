@@ -3,6 +3,10 @@
   "x_usernames": ["NullOreo_"],
   "x_poll_interval_seconds": 300,
   "x_fetch_limit": 5,
+  "quiet_hours_enabled": true,
+  "quiet_hours_start_hour": 1,
+  "quiet_hours_end_hour": 8,
+  "morning_digest_fetch_limit": 20,
   "deepseek_model": "deepseek-v4-flash",
   "summary_style_prompt": "Write the summary in Chinese for an investment-focused reader. First determine whether the post explicitly or implicitly recommends a stock, ETF, sector, or investment theme. If yes, identify the target, summarize the recommendation reason, and infer why the author is recommending it now. If no direct stock is mentioned, summarize the market view, sector implication, and possible watchlist direction. Return one short title and 2 to 4 high-signal sentences.",
   "feishu_mention_all": false

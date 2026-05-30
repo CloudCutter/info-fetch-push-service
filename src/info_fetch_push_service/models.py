@@ -17,3 +17,10 @@ class SummaryResult:
     title: str
     body: str
     tags: list[str]
+
+
+@dataclass(slots=True)
+class DigestWindow:
+    start_label: str
+    end_label: str
+    tweet_count: int

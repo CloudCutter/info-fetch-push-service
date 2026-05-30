@@ -27,6 +27,12 @@ class Storage:
                 summary_tags TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS pipeline_state (
+                state_key TEXT PRIMARY KEY,
+                state_value TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
             """
         )
         self.connection.commit()
@@ -62,6 +68,27 @@ class Storage:
                 summary.body,
                 ",".join(summary.tags),
             ),
+        )
+        self.connection.commit()
+
+    def get_state(self, state_key: str) -> str | None:
+        row = self.connection.execute(
+            "SELECT state_value FROM pipeline_state WHERE state_key = ?",
+            (state_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        return str(row["state_value"])
+
+    def set_state(self, state_key: str, state_value: str) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO pipeline_state (state_key, state_value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(state_key)
+            DO UPDATE SET state_value = excluded.state_value, updated_at = CURRENT_TIMESTAMP
+            """,
+            (state_key, state_value),
         )
         self.connection.commit()
 

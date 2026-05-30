@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict, dataclass
+from datetime import timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - fallback for pre-install bootstrap flows
-    def load_dotenv() -> bool:
+    def load_dotenv(*_args: Any, **_kwargs: Any) -> bool:
         return False
 
 
@@ -44,6 +46,7 @@ def _parse_list(value: Any) -> list[str]:
 class StaticSettings:
     x_browser_channel: str | None
     x_headless: bool
+    local_timezone_name: str
     x_login_state_path: Path
     database_path: Path
     runtime_config_path: Path
@@ -60,6 +63,7 @@ class StaticSettings:
         return cls(
             x_browser_channel=os.getenv("X_BROWSER_CHANNEL", "msedge").strip() or None,
             x_headless=_parse_bool(os.getenv("X_HEADLESS"), True),
+            local_timezone_name=os.getenv("LOCAL_TIMEZONE", "Asia/Shanghai").strip() or "Asia/Shanghai",
             x_login_state_path=Path(os.getenv("X_LOGIN_STATE_PATH", "data/x-login-state.json")),
             database_path=Path(os.getenv("DATABASE_PATH", "data/service.db")),
             runtime_config_path=Path(os.getenv("RUNTIME_CONFIG_PATH", "config/runtime.json")),
@@ -74,6 +78,15 @@ class StaticSettings:
         self.x_login_state_path.parent.mkdir(parents=True, exist_ok=True)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.runtime_config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def local_timezone(self) -> ZoneInfo | timezone:
+        try:
+            return ZoneInfo(self.local_timezone_name)
+        except ZoneInfoNotFoundError:
+            if self.local_timezone_name == "Asia/Shanghai":
+                return timezone(timedelta(hours=8))
+            raise
 
     def validate_runtime_dependencies(self) -> None:
         missing = []
@@ -91,6 +104,10 @@ class RuntimeSettings:
     x_usernames: list[str]
     x_poll_interval_seconds: int
     x_fetch_limit: int
+    quiet_hours_enabled: bool
+    quiet_hours_start_hour: int
+    quiet_hours_end_hour: int
+    morning_digest_fetch_limit: int
     deepseek_model: str
     summary_style_prompt: str
     feishu_mention_all: bool
@@ -102,6 +119,12 @@ class RuntimeSettings:
             raise ValueError("x_poll_interval_seconds must be greater than 0.")
         if self.x_fetch_limit <= 0:
             raise ValueError("x_fetch_limit must be greater than 0.")
+        if self.morning_digest_fetch_limit <= 0:
+            raise ValueError("morning_digest_fetch_limit must be greater than 0.")
+        if not 0 <= self.quiet_hours_start_hour <= 23:
+            raise ValueError("quiet_hours_start_hour must be between 0 and 23.")
+        if not 0 <= self.quiet_hours_end_hour <= 23:
+            raise ValueError("quiet_hours_end_hour must be between 0 and 23.")
         if not self.deepseek_model:
             raise ValueError("deepseek_model must not be empty.")
         if not self.summary_style_prompt.strip():
@@ -123,6 +146,10 @@ class RuntimeConfigProvider:
             x_usernames=_parse_list(payload.get("x_usernames")),
             x_poll_interval_seconds=int(payload.get("x_poll_interval_seconds", 600)),
             x_fetch_limit=int(payload.get("x_fetch_limit", 5)),
+            quiet_hours_enabled=_parse_bool(payload.get("quiet_hours_enabled"), True),
+            quiet_hours_start_hour=int(payload.get("quiet_hours_start_hour", 1)),
+            quiet_hours_end_hour=int(payload.get("quiet_hours_end_hour", 8)),
+            morning_digest_fetch_limit=int(payload.get("morning_digest_fetch_limit", 20)),
             deepseek_model=str(payload.get("deepseek_model", self.default_model)).strip(),
             summary_style_prompt=str(
                 payload.get("summary_style_prompt", DEFAULT_SUMMARY_STYLE_PROMPT)
@@ -138,9 +165,13 @@ class RuntimeConfigProvider:
 
         sample = {
             "service_enabled": True,
-            "x_usernames": ["OpenAI", "xai"],
-            "x_poll_interval_seconds": 600,
+            "x_usernames": ["NullOreo_"],
+            "x_poll_interval_seconds": 300,
             "x_fetch_limit": 5,
+            "quiet_hours_enabled": True,
+            "quiet_hours_start_hour": 1,
+            "quiet_hours_end_hour": 8,
+            "morning_digest_fetch_limit": 20,
             "deepseek_model": self.default_model,
             "summary_style_prompt": DEFAULT_SUMMARY_STYLE_PROMPT,
             "feishu_mention_all": False,
