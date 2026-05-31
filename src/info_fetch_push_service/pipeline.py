@@ -60,48 +60,80 @@ class Pipeline:
         )
 
         for username in runtime.x_usernames:
-            limit = max(runtime.x_fetch_limit, runtime.morning_digest_fetch_limit)
-            logger.info("Fetching latest posts for @%s", username)
-            tweets = scraper.fetch_latest(username=username, limit=limit)
-            new_tweets = [tweet for tweet in tweets if not self.storage.has_tweet(tweet.tweet_id)]
+            try:
+                latest_processed_at = self.storage.get_latest_published_at_for_username(username)
+                if latest_processed_at is None:
+                    limit = runtime.x_fetch_limit
+                elif self._needs_morning_digest_fetch(runtime, now_local, username):
+                    limit = runtime.morning_digest_fetch_limit
+                else:
+                    limit = runtime.x_fetch_limit
 
-            if not new_tweets:
-                logger.info("No new posts found for @%s", username)
-                continue
+                logger.info("Fetching latest posts for @%s", username)
+                tweets = scraper.fetch_latest(username=username, limit=limit)
+                new_tweets = [tweet for tweet in tweets if not self.storage.has_tweet(tweet.tweet_id)]
 
-            logger.info("Found %d new post(s) for @%s", len(new_tweets), username)
-            digest_candidates, regular_tweets = self._split_digest_candidates(runtime, now_local, username, new_tweets)
+                if latest_processed_at is None:
+                    if new_tweets:
+                        logger.info(
+                            "Bootstrapping @%s with %d visible post(s) without notification",
+                            username,
+                            len(new_tweets),
+                        )
+                        for tweet in new_tweets:
+                            self.storage.save_seen_tweet(tweet, reason="bootstrap")
+                    else:
+                        logger.info("No visible posts found while bootstrapping @%s", username)
+                    continue
 
-            if digest_candidates:
-                self._process_morning_digest(
-                    notifier=notifier,
-                    summarizer=summarizer,
-                    username=username,
-                    tweets=digest_candidates,
-                    now_local=now_local,
-                    runtime=runtime,
-                )
+                stale_backfill = [tweet for tweet in new_tweets if tweet.published_at <= latest_processed_at]
+                if stale_backfill:
+                    logger.info(
+                        "Ignoring %d historical post(s) older than the latest processed post for @%s",
+                        len(stale_backfill),
+                        username,
+                    )
 
-            # We fetch more posts than the regular push limit so morning digests can
-            # sweep the full quiet-hours window. Outside that digest path, only the
-            # newest x_fetch_limit posts should be sent individually to avoid a large
-            # historical backfill flood on a fresh run.
-            regular_tweets = sorted(
-                regular_tweets,
-                key=lambda item: self._parse_published_at(item.published_at),
-                reverse=True,
-            )[: runtime.x_fetch_limit]
+                new_tweets = [tweet for tweet in new_tweets if tweet.published_at > latest_processed_at]
 
-            for tweet in regular_tweets:
-                logger.info("Summarizing tweet %s", tweet.tweet_id)
-                summary = summarizer.summarize(tweet)
-                logger.info("Sending Feishu notification for tweet %s", tweet.tweet_id)
-                notifier.send_tweet_summary(tweet, summary)
-                self.storage.save_tweet(tweet, summary)
+                if not new_tweets:
+                    logger.info("No new posts found for @%s", username)
+                    continue
+
+                logger.info("Found %d new post(s) for @%s", len(new_tweets), username)
+                digest_candidates, regular_tweets = self._split_digest_candidates(runtime, now_local, username, new_tweets)
+
+                if digest_candidates:
+                    self._process_morning_digest(
+                        notifier=notifier,
+                        summarizer=summarizer,
+                        username=username,
+                        tweets=digest_candidates,
+                        now_local=now_local,
+                        runtime=runtime,
+                    )
+
+                # We fetch more posts than the regular push limit so morning digests can
+                # sweep the full quiet-hours window. Outside that digest path, only the
+                # newest x_fetch_limit posts should be sent individually to avoid a large
+                # historical backfill flood on a fresh run.
+                regular_tweets = sorted(
+                    regular_tweets,
+                    key=lambda item: self._parse_published_at(item.published_at),
+                    reverse=True,
+                )[: runtime.x_fetch_limit]
+
+                for tweet in regular_tweets:
+                    logger.info("Summarizing tweet %s", tweet.tweet_id)
+                    summary = summarizer.summarize(tweet)
+                    logger.info("Sending Feishu notification for tweet %s", tweet.tweet_id)
+                    notifier.send_tweet_summary(tweet, summary)
+                    self.storage.save_tweet(tweet, summary)
+            except Exception:
+                logger.exception("Account cycle failed for @%s", username)
 
     def serve_forever(self) -> None:
         while True:
-            cycle_started_at = time.time()
             sleep_seconds = 60
             try:
                 runtime = self.runtime_config_provider.load()
@@ -115,8 +147,6 @@ class Pipeline:
                 except Exception:
                     logger.exception("Could not reload runtime config after failure")
 
-            elapsed = time.time() - cycle_started_at
-            sleep_seconds = max(0, sleep_seconds - int(elapsed))
             logger.info("Sleeping for %d seconds", sleep_seconds)
             time.sleep(sleep_seconds)
 
@@ -191,6 +221,14 @@ class Pipeline:
             return False
         current_hour = now_local.hour
         return runtime.quiet_hours_start_hour <= current_hour < runtime.quiet_hours_end_hour
+
+    def _needs_morning_digest_fetch(self, runtime: RuntimeSettings, now_local: datetime, username: str) -> bool:
+        if not runtime.quiet_hours_enabled:
+            return False
+        if now_local.hour < runtime.quiet_hours_end_hour:
+            return False
+        digest_date = now_local.date()
+        return self.storage.get_state(self._digest_state_key(username, digest_date)) != "sent"
 
     def _parse_published_at(self, value: str) -> datetime:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))

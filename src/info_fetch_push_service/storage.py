@@ -44,10 +44,19 @@ class Storage:
         ).fetchone()
         return row is not None
 
+    def get_latest_published_at_for_username(self, username: str) -> str | None:
+        row = self.connection.execute(
+            "SELECT MAX(published_at) AS latest_published_at FROM processed_tweets WHERE username = ?",
+            (username,),
+        ).fetchone()
+        if row is None or row["latest_published_at"] is None:
+            return None
+        return str(row["latest_published_at"])
+
     def save_tweet(self, tweet: Tweet, summary: SummaryResult) -> None:
         self.connection.execute(
             """
-            INSERT INTO processed_tweets (
+            INSERT OR IGNORE INTO processed_tweets (
                 tweet_id,
                 username,
                 text,
@@ -70,6 +79,16 @@ class Storage:
             ),
         )
         self.connection.commit()
+
+    def save_seen_tweet(self, tweet: Tweet, reason: str = "baseline") -> None:
+        self.save_tweet(
+            tweet,
+            SummaryResult(
+                title=f"[{reason}]",
+                body="Seen without notification.",
+                tags=[],
+            ),
+        )
 
     def get_state(self, state_key: str) -> str | None:
         row = self.connection.execute(

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 
 import httpx
 
 from ..models import DigestWindow, SummaryResult, Tweet
+
+logger = logging.getLogger(__name__)
 
 
 class DeepSeekSummarizer:
@@ -16,35 +20,24 @@ class DeepSeekSummarizer:
 
     def summarize(self, tweet: Tweet) -> SummaryResult:
         prompt = self._build_prompt(tweet)
-        response = httpx.post(
-            f"{self.base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self.model,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You summarize X posts for a Chinese-speaking reader. "
-                            "Return compact JSON with keys: title, body, tags. "
-                            "title should be at most 24 Chinese characters. "
-                            "body should be 2 to 4 concise sentences merged into one paragraph. "
-                            "Prioritize extracting stock ideas, sector ideas, recommendation logic, and the author's likely motivation for mentioning it now. "
-                            "If no stock idea is present, summarize the market view and potential implication instead. "
-                            "tags should contain 1 to 3 short tags. "
-                            f"Additional style requirement: {self.style_prompt}"
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.3,
-                "stream": False,
-            },
-            timeout=60.0,
+        response = self._post_chat_completion(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You summarize X posts for a Chinese-speaking reader. "
+                        "Return compact JSON with keys: title, body, tags. "
+                        "title should be at most 24 Chinese characters. "
+                        "body should be 2 to 4 concise sentences merged into one paragraph. "
+                        "Prioritize extracting stock ideas, sector ideas, recommendation logic, and the author's likely motivation for mentioning it now. "
+                        "If no stock idea is present, summarize the market view and potential implication instead. "
+                        "tags should contain 1 to 3 short tags. "
+                        f"Additional style requirement: {self.style_prompt}"
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            timeout=90.0,
         )
         response.raise_for_status()
 
@@ -65,39 +58,28 @@ class DeepSeekSummarizer:
         if not tweets:
             raise ValueError("summarize_digest requires at least one tweet")
 
-        response = httpx.post(
-            f"{self.base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self.model,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You summarize overnight X posts for a Chinese-speaking investment reader. "
-                            "Return compact JSON with keys: title, body, tags. "
-                            "title should be at most 24 Chinese characters. "
-                            "body should be 3 to 5 concise sentences merged into one paragraph. "
-                            "Prioritize extracting recommended stocks, sectors, investment themes, supporting reasons, "
-                            "and why the author appears to be mentioning them now. "
-                            "If no direct recommendation exists, summarize the market view and likely watchlist implication. "
-                            "tags should contain 1 to 3 short tags. "
-                            f"Additional style requirement: {self.style_prompt}"
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": self._build_digest_prompt(username, tweets, window),
-                    },
-                ],
-                "temperature": 0.3,
-                "stream": False,
-            },
-            timeout=90.0,
+        response = self._post_chat_completion(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You summarize overnight X posts for a Chinese-speaking investment reader. "
+                        "Return compact JSON with keys: title, body, tags. "
+                        "title should be at most 24 Chinese characters. "
+                        "body should be 3 to 5 concise sentences merged into one paragraph. "
+                        "Prioritize extracting recommended stocks, sectors, investment themes, supporting reasons, "
+                        "and why the author appears to be mentioning them now. "
+                        "If no direct recommendation exists, summarize the market view and likely watchlist implication. "
+                        "tags should contain 1 to 3 short tags. "
+                        f"Additional style requirement: {self.style_prompt}"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": self._build_digest_prompt(username, tweets, window),
+                },
+            ],
+            timeout=120.0,
         )
         response.raise_for_status()
 
@@ -153,3 +135,31 @@ class DeepSeekSummarizer:
             if start == -1 or end == -1 or end <= start:
                 raise ValueError(f"DeepSeek response is not valid JSON: {content}")
             return json.loads(content[start : end + 1])
+
+    def _post_chat_completion(self, messages: list[dict[str, str]], timeout: float) -> httpx.Response:
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                return httpx.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "response_format": {"type": "json_object"},
+                        "messages": messages,
+                        "temperature": 0.3,
+                        "stream": False,
+                    },
+                    timeout=timeout,
+                )
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                logger.warning("DeepSeek request timed out on attempt %d/3", attempt)
+                if attempt < 3:
+                    time.sleep(attempt * 2)
+        if last_exc is None:
+            raise RuntimeError("DeepSeek request failed without an exception")
+        raise last_exc
