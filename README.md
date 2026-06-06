@@ -2,7 +2,7 @@
 
 ## 项目简介
 
-这个项目运行在本地，用来监控指定 X 账号，抓取新推文，调用 DeepSeek 生成中文摘要，并推送到飞书机器人。
+这个项目运行在本地或服务器上，用来监控指定 X 账号，抓取新推文，调用 DeepSeek 生成中文翻译与点评，并推送到飞书机器人。
 
 当前设计目标：
 
@@ -10,16 +10,18 @@
 - 已处理过的推文不再重复总结和推送
 - 支持运行时动态修改监控账号和摘要风格
 - 支持静默时段与早间汇总
+- 同时兼容本机 Windows 运行和 Linux 服务器部署
 
-## 工作流程
+## 当前工作流
 
 ```text
 正常时段：
   定时器
     -> 抓取 X 账号主页
-    -> 和本地数据库中的 tweet_id 做比较
+    -> 对新推文补抓详情页上下文
+    -> 和本地数据库中的 tweet_id / published_at 做比较
     -> 如果没有新推文：直接结束，不调用 DeepSeek
-    -> 如果有新推文：调用 DeepSeek 摘要
+    -> 如果有新推文：调用 DeepSeek 生成中文翻译 + 点评
     -> 推送到飞书
     -> 写入 SQLite，标记为已处理
 
@@ -31,7 +33,7 @@
 08:00 之后：
   当天第一次有效轮询
     -> 补抓 01:00-08:00 这段时间内的新推文
-    -> 汇总成一条晨报
+    -> 按白天相同格式逐条整理成晨报
     -> 发到飞书
 ```
 
@@ -51,6 +53,7 @@ config/runtime.example.json
 config/runtime.json
 data/service.db
 data/x-login-state.json
+deploy/systemd/info-fetch-push.service
 logs/service.log
 ```
 
@@ -78,6 +81,15 @@ logs/service.log
 - `DATABASE_PATH`
 - `RUNTIME_CONFIG_PATH`
 
+说明：
+
+- `X_BROWSER_CHANNEL`
+  - Windows 本机建议设为 `msedge`
+  - Linux 服务器建议留空，直接使用 Playwright 自带 Chromium
+- `X_SYSTEM_USER_DATA_PATH`
+  - 仅在 Windows 本机需要
+  - Linux 服务器通常留空
+
 ### 2. 运行时配置
 
 运行时配置放在 `config/runtime.json`，每轮执行前都会重新读取一次，修改后下一轮自动生效。
@@ -96,70 +108,40 @@ logs/service.log
 - `summary_style_prompt`
 - `feishu_mention_all`
 
-## 当前运行时配置模板
-
-```json
-{
-  "service_enabled": true,
-  "x_usernames": ["NullOreo_"],
-  "x_poll_interval_seconds": 300,
-  "x_fetch_limit": 5,
-  "quiet_hours_enabled": true,
-  "quiet_hours_start_hour": 1,
-  "quiet_hours_end_hour": 8,
-  "morning_digest_fetch_limit": 20,
-  "deepseek_model": "deepseek-v4-flash",
-  "summary_style_prompt": "Write the summary in Chinese for an investment-focused reader. First determine whether the post explicitly or implicitly recommends a stock, ETF, sector, or investment theme. If yes, identify the target, summarize the recommendation reason, and infer why the author is recommending it now. If no direct stock is mentioned, summarize the market view, sector implication, and possible watchlist direction. Return one short title and 2 to 4 high-signal sentences.",
-  "feishu_mention_all": false
-}
-```
-
 ## 防重机制
 
-当前防重逻辑是基于 `tweet_id` 做的。
+当前防重逻辑是双层判断：
 
-实现方式：
+1. 先按账号读取数据库里最新的 `published_at`
+2. 只处理比该时间更晚的新推文
+3. 再用 `tweet_id` 做最终去重
 
-1. 每次抓取后，程序会拿到若干条最新推文
-2. 对每条推文读取它的 `tweet_id`
-3. 到 SQLite 表 `processed_tweets` 里查询这个 `tweet_id` 是否已经存在
-4. 如果已经存在，说明这条推文之前已经处理过，就不会再次调用 DeepSeek，也不会再次推送
-5. 如果不存在，才会进入摘要和推送流程
-6. 推送成功后，把这条推文写入 `processed_tweets`
+这样可以避免：
 
-对应代码：
+- 已经处理过的推文重复调用 DeepSeek
+- 新加账号时不断回溯历史推文
+- 服务重启后重复推送旧内容
 
-- 防重查询：[storage.py](/E:/claudeProject/info-fetch-push-service/src/info_fetch_push_service/storage.py)
-- 主流程判断：[pipeline.py](/E:/claudeProject/info-fetch-push-service/src/info_fetch_push_service/pipeline.py)
+## 推送格式
 
-也就是说，当前的“去重键”就是：
+单条推文默认推送为：
 
-- `tweet_id`
-
-不是按文本去重，也不是按时间去重。
-
-## 静默时段与早间汇总
-
-当前规则：
-
-- `01:00-08:00` 不抓取
-- `08:00` 后第一轮，把夜间推文统一汇总
-
-相关配置：
-
-```json
-"quiet_hours_enabled": true,
-"quiet_hours_start_hour": 1,
-"quiet_hours_end_hour": 8,
-"morning_digest_fetch_limit": 20
+```text
+[标题]
+作者：显示名 (@username)
+时间：发布时间
+标签：标签1 / 标签2
+推文翻译：完整中文翻译
+回复对象：...（如果有）
+引用推文作者：...（如果有）
+引用推文内容：...（如果有）
+点评：中文解读
+原链接：https://x.com/...
 ```
 
-说明：
+夜间汇总会复用同样的单条格式，只是把多条内容拼成一条晨报消息。
 
-- `morning_digest_fetch_limit` 表示早间汇总时最多向上补抓多少条
-- 如果某个账号夜间发文特别多，需要把这个值调大
-
-## 安装与运行
+## Windows 本机使用
 
 ### 1. 创建虚拟环境
 
@@ -181,22 +163,19 @@ python -m playwright install chromium
 Copy-Item .env.example .env
 ```
 
+Windows 本机推荐：
+
+```dotenv
+X_BROWSER_CHANNEL=msedge
+X_HEADLESS=true
+LOCAL_TIMEZONE=Asia/Shanghai
+```
+
 至少填写：
 
 - `DEEPSEEK_API_KEY`
 - `FEISHU_WEBHOOK_URL`
 - `FEISHU_BOT_SECRET`（如果飞书机器人开启签名）
-
-推荐同时确认：
-
-- `X_BROWSER_CHANNEL=msedge`
-- `X_SYSTEM_USER_DATA_PATH` 指向本机 Edge 用户数据目录
-
-默认值一般就是：
-
-```text
-%LOCALAPPDATA%\Microsoft\Edge\User Data
-```
 
 ### 4. 初始化运行时配置
 
@@ -216,14 +195,11 @@ Copy-Item .env.example .env
 .venv\Scripts\python -m info_fetch_push_service.main import-edge-session
 ```
 
-当前版本抓取最新推文时，会优先直接复用你本机 Edge 的真实登录资料。
-这能比单独导出的会话文件更稳定地看到最新帖子。
+说明：
 
-注意：
-
-- 抓取执行时，Edge 需要处于关闭状态
-- 如果 Edge 正在运行，程序可能无法打开资料目录并会报错
-- 这时先关闭所有 Edge 窗口，再重试 `run-once` 或 `serve`
+- 这一步只支持 Windows 本机
+- 导入前需要先关闭所有 Edge 窗口
+- 导入后会更新 `data/x-login-state.json`
 
 ### 7. 运行一次
 
@@ -243,6 +219,195 @@ Copy-Item .env.example .env
 .venv\Scripts\python -m info_fetch_push_service.main stop
 ```
 
+## Linux 服务器部署
+
+### 推荐架构
+
+推荐用法：
+
+- 服务器系统：`Ubuntu 24.04 LTS`
+- 浏览器：Playwright Chromium 无头模式
+- 数据库：SQLite
+- 登录态：从你的 Windows 本机导出的 `data/x-login-state.json`
+- 常驻方式：`systemd`
+
+### 为什么服务器上不要直接导入 Edge
+
+`import-edge-session` 依赖：
+
+- Windows
+- 本机 Microsoft Edge 用户资料
+
+因此服务器上不要执行这个命令。服务器应只使用已经导出的：
+
+- `data/x-login-state.json`
+
+### 部署步骤
+
+#### 1. 准备服务器
+
+建议起步配置：
+
+- `2 vCPU`
+- `4 GB RAM`
+- `Ubuntu 24.04 LTS`
+
+#### 2. 上传项目
+
+建议部署到：
+
+```bash
+/opt/info-fetch-push-service
+```
+
+至少需要这些文件：
+
+- `src/`
+- `config/`
+- `pyproject.toml`
+- `.env`
+- `data/x-login-state.json`
+
+如果你想保留现有去重状态，也一起上传：
+
+- `data/service.db`
+
+#### 3. 安装运行环境
+
+```bash
+sudo apt update
+sudo apt install -y python3.11 python3.11-venv python3-pip
+
+cd /opt/info-fetch-push-service
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+python -m playwright install chromium
+python -m playwright install-deps chromium
+```
+
+#### 4. 配置 `.env`
+
+服务器建议这样配：
+
+```dotenv
+X_BROWSER_CHANNEL=
+X_HEADLESS=true
+LOCAL_TIMEZONE=Asia/Shanghai
+X_LOGIN_STATE_PATH=data/x-login-state.json
+X_SYSTEM_USER_DATA_PATH=
+DATABASE_PATH=data/service.db
+RUNTIME_CONFIG_PATH=config/runtime.json
+DEEPSEEK_API_KEY=你的key
+FEISHU_WEBHOOK_URL=你的webhook
+FEISHU_BOT_SECRET=
+```
+
+#### 5. 从本机同步 X 登录态
+
+先在本机执行：
+
+```powershell
+.venv\Scripts\python -m info_fetch_push_service.main import-edge-session
+```
+
+然后把这个文件上传到服务器：
+
+- `data/x-login-state.json`
+
+说明：
+
+- 登录态失效后，需要重新在本机更新一次，再同步到服务器
+
+#### 6. 先手动试跑
+
+```bash
+cd /opt/info-fetch-push-service
+source .venv/bin/activate
+python -m info_fetch_push_service.main show-config
+python -m info_fetch_push_service.main run-once
+```
+
+#### 7. 配置 systemd
+
+项目已经提供模板：
+
+- [deploy/systemd/info-fetch-push.service](/E:/claudeProject/info-fetch-push-service/deploy/systemd/info-fetch-push.service)
+
+你可以把它复制到：
+
+```bash
+/etc/systemd/system/info-fetch-push.service
+```
+
+如果你的部署目录不是 `/opt/info-fetch-push-service`，记得先改模板里的：
+
+- `WorkingDirectory`
+- `ExecStart`
+
+然后执行：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable info-fetch-push
+sudo systemctl start info-fetch-push
+sudo systemctl status info-fetch-push
+```
+
+查看日志：
+
+```bash
+sudo journalctl -u info-fetch-push -f
+```
+
+### Linux 上停止服务
+
+如果是用 systemd：
+
+```bash
+sudo systemctl stop info-fetch-push
+```
+
+如果是直接用本项目命令启动：
+
+```bash
+python -m info_fetch_push_service.main stop
+```
+
+现在 `stop` 命令已经兼容 Linux。
+
+## 常见问题
+
+### 1. 服务器为什么不能直接用我本机正在开的 Edge
+
+因为服务器没有你的本机 Edge 资料，也不应该去碰你的桌面浏览器环境。服务器模式应只依赖：
+
+- `x-login-state.json`
+
+### 2. `x-login-state.json` 过期了怎么办
+
+在 Windows 本机重新导出一次：
+
+```powershell
+.venv\Scripts\python -m info_fetch_push_service.main import-edge-session
+```
+
+然后把新的 `data/x-login-state.json` 覆盖到服务器。
+
+### 3. 服务器上 `X_BROWSER_CHANNEL` 要不要设成 `msedge`
+
+不建议。服务器建议留空，直接用 Playwright Chromium。
+
+### 4. 会影响现在 Windows 本机逻辑吗
+
+不会。
+
+这次兼容改造保持了：
+
+- Windows 本机仍可继续使用 `msedge`
+- `import-edge-session` 仍保留
+- Linux 只是新增兼容路径
+
 ## 日志
 
 主日志文件：
@@ -254,39 +419,7 @@ Copy-Item .env.example .env
 - 单文件约 `2 MB`
 - 保留 `5` 份历史日志
 
-如果你是用额外的 PowerShell 重定向方式启动，也可能看到：
-
-- `logs/service.out.log`
-- `logs/service.err.log`
-
-## 当前状态
-
-最新抓取问题已经修复。
-
-程序现在会优先复用你本机 Edge 的真实登录资料，而不是只依赖单独导出的 `x-login-state.json`。
-这样可以抓到你在浏览器里实际能看到的最新推文。
-
-例如，`@NullOreo_` 的最新抓取结果已经能看到这条帖子：
-
-- `https://x.com/NullOreo_/status/2060090619897479621`
-
-也就是说，之前抓到 `2025` 年旧推文的问题，已经不是当前版本的行为。
-
-当前最需要注意的限制是：
-
-- 抓取时不要让 Edge 保持打开
-- 如果 Edge 正在运行，最新抓取可能失败
-- 失败时程序会明确报错，而不会静默退回旧会话
-
-## 结论
-
-当前这套逻辑的核心是：
-
-- `tweet_id` 去重，保证已处理推文不会重复调用 DeepSeek 和重复推送
-- 优先使用真实 Edge 登录资料，保证尽可能抓到浏览器里可见的最新推文
-
 ## 参考文档
 
 - [DeepSeek API Docs](https://api-docs.deepseek.com/)
-- [DeepSeek Pricing](https://api-docs.deepseek.com/quick_start/pricing/)
 - [Feishu Custom Bot](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot?lang=zh-CN)

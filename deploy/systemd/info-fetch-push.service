@@ -1,0 +1,15 @@
+[Unit]
+Description=Info Fetch Push Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/info-fetch-push-service
+ExecStart=/opt/info-fetch-push-service/.venv/bin/python -m info_fetch_push_service.main serve
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

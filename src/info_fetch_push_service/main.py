@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 from logging.handlers import RotatingFileHandler
@@ -102,6 +103,14 @@ def main() -> int:
             print(f"Saved X login state to {settings.x_login_state_path}")
             return 0
 
+        if not sys.platform.startswith("win"):
+            print(
+                "import-edge-session is only supported on Windows with a local Microsoft Edge profile. "
+                "On Linux servers, copy data/x-login-state.json from a machine that already exported it.",
+                file=sys.stderr,
+            )
+            return 1
+
         count = scraper.import_edge_login_state()
         print(f"Imported {count} X-related cookies into {settings.x_login_state_path}")
         return 0
@@ -135,22 +144,48 @@ def main() -> int:
 
 
 def stop_background_service() -> int:
-    script = (
-        "$procs = Get-CimInstance Win32_Process | "
-        "Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*info_fetch_push_service.main*serve*' }; "
-        "$count = @($procs).Count; "
-        "foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force }; "
-        "Write-Output $count"
-    )
+    if sys.platform.startswith("win"):
+        script = (
+            "$procs = Get-CimInstance Win32_Process | "
+            "Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*info_fetch_push_service.main*serve*' }; "
+            "$count = @($procs).Count; "
+            "foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force }; "
+            "Write-Output $count"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=os.environ.copy(),
+        )
+        output = result.stdout.strip()
+        return int(output) if output else 0
+
     result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", script],
+        ["ps", "-eo", "pid=,args="],
         capture_output=True,
         text=True,
         check=True,
         env=os.environ.copy(),
     )
-    output = result.stdout.strip()
-    return int(output) if output else 0
+    current_pid = os.getpid()
+    stopped = 0
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        pid_text, _, args = line.partition(" ")
+        if not pid_text.isdigit():
+            continue
+        pid = int(pid_text)
+        if pid == current_pid:
+            continue
+        if "info_fetch_push_service.main" not in args or "serve" not in args:
+            continue
+        os.kill(pid, signal.SIGTERM)
+        stopped += 1
+    return stopped
 
 
 if __name__ == "__main__":

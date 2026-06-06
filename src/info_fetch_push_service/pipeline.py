@@ -165,17 +165,15 @@ class Pipeline:
             end_label=f"{digest_date.isoformat()} {runtime.quiet_hours_end_hour:02d}:00",
             tweet_count=len(tweets),
         )
-        logger.info("Summarizing morning digest for @%s with %d post(s)", username, len(tweets))
-        summary = summarizer.summarize_digest(username=username, tweets=tweets, window=window)
-        logger.info("Sending morning digest for @%s", username)
-        notifier.send_digest_summary(username=username, summary=summary, tweets=tweets, window=window)
-        digest_marker = SummaryResult(
-            title=f"{summary.title} [digest]",
-            body=summary.body,
-            tags=summary.tags,
-        )
+        logger.info("Summarizing morning digest items for @%s with %d post(s)", username, len(tweets))
+        tweet_summaries: list[tuple[Tweet, SummaryResult]] = []
         for tweet in tweets:
-            self.storage.save_tweet(tweet, digest_marker)
+            tweet_summaries.append((tweet, summarizer.summarize(tweet)))
+
+        logger.info("Sending morning digest for @%s", username)
+        notifier.send_digest_summaries(username=username, tweet_summaries=tweet_summaries, window=window)
+        for tweet, summary in tweet_summaries:
+            self.storage.save_tweet(tweet, summary)
         self.storage.set_state(self._digest_state_key(username, digest_date), "sent")
 
     def _split_digest_candidates(

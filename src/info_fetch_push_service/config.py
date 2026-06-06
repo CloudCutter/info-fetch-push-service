@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import asdict, dataclass
 from datetime import timedelta, timezone
 from pathlib import Path
@@ -42,13 +43,26 @@ def _parse_list(value: Any) -> list[str]:
     return [str(item).strip().lstrip("@") for item in items if str(item).strip()]
 
 
+def _default_browser_channel() -> str | None:
+    if sys.platform.startswith("win"):
+        return "msedge"
+    return None
+
+
+def _default_system_user_data_path() -> Path | None:
+    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+    if not local_app_data:
+        return None
+    return Path(local_app_data) / "Microsoft" / "Edge" / "User Data"
+
+
 @dataclass(slots=True)
 class StaticSettings:
     x_browser_channel: str | None
     x_headless: bool
     local_timezone_name: str
     x_login_state_path: Path
-    x_system_user_data_path: Path
+    x_system_user_data_path: Path | None
     x_imported_profile_path: Path
     database_path: Path
     runtime_config_path: Path
@@ -62,17 +76,24 @@ class StaticSettings:
     def load(cls) -> "StaticSettings":
         load_dotenv(override=True)
 
+        browser_channel_value = os.getenv("X_BROWSER_CHANNEL")
+        if browser_channel_value is None:
+            browser_channel = _default_browser_channel()
+        else:
+            browser_channel = browser_channel_value.strip() or None
+
+        system_user_data_value = os.getenv("X_SYSTEM_USER_DATA_PATH")
+        if system_user_data_value is None:
+            system_user_data_path = _default_system_user_data_path()
+        else:
+            system_user_data_path = Path(system_user_data_value) if system_user_data_value.strip() else None
+
         return cls(
-            x_browser_channel=os.getenv("X_BROWSER_CHANNEL", "msedge").strip() or None,
+            x_browser_channel=browser_channel,
             x_headless=_parse_bool(os.getenv("X_HEADLESS"), True),
             local_timezone_name=os.getenv("LOCAL_TIMEZONE", "Asia/Shanghai").strip() or "Asia/Shanghai",
             x_login_state_path=Path(os.getenv("X_LOGIN_STATE_PATH", "data/x-login-state.json")),
-            x_system_user_data_path=Path(
-                os.getenv(
-                    "X_SYSTEM_USER_DATA_PATH",
-                    str(Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Edge" / "User Data"),
-                )
-            ),
+            x_system_user_data_path=system_user_data_path,
             x_imported_profile_path=Path(os.getenv("X_IMPORTED_PROFILE_PATH", "data/edge-profile-import")),
             database_path=Path(os.getenv("DATABASE_PATH", "data/service.db")),
             runtime_config_path=Path(os.getenv("RUNTIME_CONFIG_PATH", "config/runtime.json")),
