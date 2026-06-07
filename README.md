@@ -423,3 +423,99 @@ python -m info_fetch_push_service.main stop
 
 - [DeepSeek API Docs](https://api-docs.deepseek.com/)
 - [Feishu Custom Bot](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot?lang=zh-CN)
+
+## 常用命令速查
+
+### 服务器端
+
+查看服务状态：
+
+```bash
+systemctl status info-fetch-push
+```
+
+启动服务：
+
+```bash
+systemctl start info-fetch-push
+```
+
+重启服务：
+
+```bash
+systemctl restart info-fetch-push
+```
+
+停止服务：
+
+```bash
+systemctl stop info-fetch-push
+```
+
+立即手动执行一轮：
+
+```bash
+cd /opt/info-fetch-push-service
+source .venv/bin/activate
+python -m info_fetch_push_service.main run-once
+```
+
+查看当前运行配置：
+
+```bash
+cd /opt/info-fetch-push-service
+source .venv/bin/activate
+python -m info_fetch_push_service.main show-config
+```
+
+看 systemd 实时日志：
+
+```bash
+journalctl -u info-fetch-push -f
+```
+
+看最近 100 行 systemd 日志：
+
+```bash
+journalctl -u info-fetch-push -n 100 --no-pager
+```
+
+看程序文件日志：
+
+```bash
+tail -f /opt/info-fetch-push-service/logs/service.log
+```
+
+编译检查代码是否有语法错误：
+
+```bash
+cd /opt/info-fetch-push-service
+source .venv/bin/activate
+python -m compileall src
+```
+
+### Windows 本机
+
+立即跑一轮：
+
+```powershell
+.venv\Scripts\python -m info_fetch_push_service.main run-once
+```
+
+常驻运行：
+
+```powershell
+.venv\Scripts\python -m info_fetch_push_service.main serve
+```
+
+停止后台服务：
+
+```powershell
+.venv\Scripts\python -m info_fetch_push_service.main stop
+```
+
+查看当前配置：
+
+```powershell
+.venv\Scripts\python -m info_fetch_push_service.main show-config
+```

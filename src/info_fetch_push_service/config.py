@@ -21,6 +21,8 @@ DEFAULT_SUMMARY_STYLE_PROMPT = (
     "First determine whether the post explicitly or implicitly recommends a stock, ETF, sector, or investment theme. "
     "If yes, identify the target, summarize the recommendation reason, and infer why the author is recommending it now. "
     "If no direct stock is mentioned, summarize the market view, sector implication, and possible watchlist direction. "
+    "If the post uses slang, abbreviations, memes, coded wording, trading shorthand, or sector jargon, explain those terms in plain Chinese instead of merely rephrasing the post. "
+    "If the post is already obvious, keep the explanation brief. "
     "Return one short title and 2 to 4 high-signal sentences."
 )
 

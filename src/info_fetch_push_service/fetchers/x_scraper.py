@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -9,6 +10,8 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 from ..models import Tweet
+
+logger = logging.getLogger(__name__)
 
 
 class XTimelineScraper:
@@ -275,63 +278,89 @@ class XTimelineScraper:
         page = context.new_page()
         try:
             for tweet in tweets:
-                page.goto(tweet.url, wait_until="domcontentloaded", timeout=60000)
                 try:
+                    page.goto(tweet.url, wait_until="domcontentloaded", timeout=60000)
                     page.wait_for_selector('article[data-testid="tweet"]', timeout=30000)
                 except PlaywrightTimeoutError:
+                    logger.warning(
+                        "Skipping detail enrichment for tweet %s because the detail page did not expose a tweet article in time",
+                        tweet.tweet_id,
+                    )
+                    continue
+                except Exception:
+                    logger.warning(
+                        "Skipping detail enrichment for tweet %s because opening the detail page failed",
+                        tweet.tweet_id,
+                        exc_info=True,
+                    )
                     continue
 
                 self._expand_long_post(page)
 
-                detail = page.eval_on_selector(
-                    'article[data-testid="tweet"]',
-                    """
-                    (article, username) => {
-                      const normalize = (value) => (value || '').trim();
-                      const userBlocks = [...article.querySelectorAll('[data-testid="User-Name"]')].map((block) => {
-                        const pieces = [...block.querySelectorAll('span')]
-                          .map((node) => normalize(node.innerText))
-                          .filter(Boolean);
-                        const handle = pieces.find((value) => value.startsWith('@')) || '';
-                        const name = pieces.find((value) => !value.startsWith('@')) || '';
-                        return { name, handle };
-                      }).filter((item) => item.name || item.handle);
-                      const textBlocks = [...article.querySelectorAll('[data-testid="tweetText"]')]
-                        .map((node) => normalize(node.innerText))
-                        .filter(Boolean);
-                      const articleText = normalize(article.innerText);
-                      const quotedAuthor = userBlocks.length > 1 ? userBlocks[1] : null;
-                      const anchorHandles = [...new Set(
-                        [...article.querySelectorAll('a[href^="/"]')]
-                          .map((node) => normalize(node.innerText))
-                          .filter((value) => value.startsWith('@'))
-                      )];
-                      const hasReplyContext = /replying to|in reply to|\\u56de\\u590d|\\u56de\\u8986|\\ub2f5\\uae00|\\u8fd4\\u4fe1\\u5148|en r\\u00e9ponse|respondiendo a|em resposta|antwort an/i.test(articleText);
-                      const replyTargets = hasReplyContext
-                        ? anchorHandles.filter((handle) => {
-                            const normalizedHandle = handle.toLowerCase();
-                            const selfHandle = `@${String(username || '').toLowerCase()}`;
-                            const quotedHandle = quotedAuthor && quotedAuthor.handle
-                              ? quotedAuthor.handle.toLowerCase()
-                              : '';
-                            return normalizedHandle !== selfHandle && normalizedHandle !== quotedHandle;
-                          }).slice(0, 5)
-                        : [];
+                if page.query_selector('article[data-testid="tweet"]') is None:
+                    logger.warning(
+                        "Skipping detail enrichment for tweet %s because the tweet article is not present on the page",
+                        tweet.tweet_id,
+                    )
+                    continue
 
-                      return {
-                        displayName: userBlocks[0] ? userBlocks[0].name : '',
-                        mainText: textBlocks[0] || '',
-                        quotedText: textBlocks.length > 1 ? textBlocks.slice(1).join('\\n\\n') : '',
-                        quotedDisplayName: quotedAuthor ? quotedAuthor.name : '',
-                        quotedUsername: quotedAuthor && quotedAuthor.handle
-                          ? quotedAuthor.handle.replace(/^@/, '')
-                          : '',
-                        replyingTo: replyTargets,
-                      };
-                    }
-                    """,
-                    tweet.username,
-                )
+                try:
+                    detail = page.eval_on_selector(
+                        'article[data-testid="tweet"]',
+                        """
+                        (article, username) => {
+                          const normalize = (value) => (value || '').trim();
+                          const userBlocks = [...article.querySelectorAll('[data-testid="User-Name"]')].map((block) => {
+                            const pieces = [...block.querySelectorAll('span')]
+                              .map((node) => normalize(node.innerText))
+                              .filter(Boolean);
+                            const handle = pieces.find((value) => value.startsWith('@')) || '';
+                            const name = pieces.find((value) => !value.startsWith('@')) || '';
+                            return { name, handle };
+                          }).filter((item) => item.name || item.handle);
+                          const textBlocks = [...article.querySelectorAll('[data-testid="tweetText"]')]
+                            .map((node) => normalize(node.innerText))
+                            .filter(Boolean);
+                          const articleText = normalize(article.innerText);
+                          const quotedAuthor = userBlocks.length > 1 ? userBlocks[1] : null;
+                          const anchorHandles = [...new Set(
+                            [...article.querySelectorAll('a[href^="/"]')]
+                              .map((node) => normalize(node.innerText))
+                              .filter((value) => value.startsWith('@'))
+                          )];
+                          const hasReplyContext = /replying to|in reply to|\\u56de\\u590d|\\u56de\\u8986|\\ub2f5\\uae00|\\u8fd4\\u4fe1\\u5148|en r\\u00e9ponse|respondiendo a|em resposta|antwort an/i.test(articleText);
+                          const replyTargets = hasReplyContext
+                            ? anchorHandles.filter((handle) => {
+                                const normalizedHandle = handle.toLowerCase();
+                                const selfHandle = `@${String(username || '').toLowerCase()}`;
+                                const quotedHandle = quotedAuthor && quotedAuthor.handle
+                                  ? quotedAuthor.handle.toLowerCase()
+                                  : '';
+                                return normalizedHandle !== selfHandle && normalizedHandle !== quotedHandle;
+                              }).slice(0, 5)
+                            : [];
+
+                          return {
+                            displayName: userBlocks[0] ? userBlocks[0].name : '',
+                            mainText: textBlocks[0] || '',
+                            quotedText: textBlocks.length > 1 ? textBlocks.slice(1).join('\\n\\n') : '',
+                            quotedDisplayName: quotedAuthor ? quotedAuthor.name : '',
+                            quotedUsername: quotedAuthor && quotedAuthor.handle
+                              ? quotedAuthor.handle.replace(/^@/, '')
+                              : '',
+                            replyingTo: replyTargets,
+                          };
+                        }
+                        """,
+                        tweet.username,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Skipping detail enrichment for tweet %s because extracting detail fields failed",
+                        tweet.tweet_id,
+                        exc_info=True,
+                    )
+                    continue
 
                 if not detail:
                     continue
